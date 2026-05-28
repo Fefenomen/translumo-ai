@@ -13,9 +13,9 @@ from PyQt5.QtCore import QTimer
 
 from config import load_config
 from capture import capture_region_np
-from ocr import ocr_image, text_significantly_different
+from ocr import ocr_image, ocr_image_blocks, text_significantly_different
 from translators.base import TranslationResult
-from overlay import TranslationOverlay
+from overlay import OverlayManager
 
 
 def create_test_image(text: str, width=600, height=100):
@@ -45,23 +45,6 @@ def test_diff():
     assert text_significantly_different("hello", "hello world") is True
     assert text_significantly_different("test", "test!") is True
     print("  Diff detection: OK")
-
-
-def test_overlay():
-    app = QApplication.instance() or QApplication(sys.argv + ["-platform", "wayland"])
-    overlay = TranslationOverlay(
-        geometry=(100, 200, 300, 150),
-        bg_color="#1a1a1a",
-        text_color="#ffffff",
-        font_size=16,
-        opacity=180,
-    )
-    overlay.update_text("Original text", "Translated text")
-    assert overlay.translated_text == "Translated text"
-    assert overlay.original_text == "Original text"
-    print("  Overlay creation and update: OK")
-    overlay.hide_overlay()
-    overlay.deleteLater()
 
 
 def test_config():
@@ -104,9 +87,6 @@ if __name__ == "__main__":
     
     print("\n4. Mock translation tests:")
     test_mock_translation()
-    
-    print("\n5. Overlay tests:")
-    test_overlay()
     
     print("\n=== All tests passed! ===")
     

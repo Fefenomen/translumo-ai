@@ -1,30 +1,29 @@
 from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPainter, QColor
+from PyQt5.QtCore import Qt, QRect
+from PyQt5.QtGui import QPainter, QColor, QFont
 
 
-class TranslationOverlay(QWidget):
-    def __init__(self, geometry=None, bg_color="#1a1a1a", text_color="#ffffff",
-                 font_size=16, opacity=180):
+class BlockOverlay(QWidget):
+    def __init__(self, bg_color="#1a1a1a", text_color="#ffffff", font_size=16, opacity=200):
         super().__init__(None)
         self.bg_color = QColor(bg_color)
         self.text_color = QColor(text_color)
+        self.text_color.setAlpha(255)
         self.bg_color.setAlpha(opacity)
-        self.translated_text = ""
+        self.font_size = font_size
         self.original_text = ""
-        self._active = False
-        self._indicator_color = QColor("#ff4444")
+        self.translated_text = ""
 
         self.setWindowFlags(
             Qt.FramelessWindowHint
             | Qt.WindowStaysOnTopHint
             | Qt.Tool
             | Qt.WindowDoesNotAcceptFocus
-            | Qt.X11BypassWindowManagerHint
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_DeleteOnClose)
 
         self.label = QLabel(self)
         self.label.setAlignment(Qt.AlignCenter)
@@ -34,56 +33,125 @@ class TranslationOverlay(QWidget):
             f"font-size: {font_size}px;"
             f"font-family: monospace;"
             f"background: transparent;"
-            f"padding: 8px;"
+            f"padding: 2px;"
         )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 0, 4, 4)
-        layout.setSpacing(4)
-        self.indicator = QLabel(self)
-        self.indicator.setFixedHeight(3)
-        layout.addWidget(self.indicator)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(0)
         layout.addWidget(self.label)
         self.setLayout(layout)
 
-        if geometry:
-            x, y, w, h = geometry
-            self.setGeometry(x, y, w, h)
-
-    def set_active(self, active: bool):
-        self._active = active
-        self._indicator_color = QColor("#44ff44") if active else QColor("#ff4444")
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(self.rect(), self.bg_color)
-        indicator_rect = self.rect().adjusted(4, 4, -4, -8)
-        indicator_rect.setHeight(3)
-        painter.fillRect(indicator_rect, self._indicator_color)
-        painter.end()
-        super().paintEvent(event)
-
-    def update_text(self, original: str, translated: str):
+    def set_text(self, original: str, translated: str):
         self.original_text = original
         self.translated_text = translated
         self.label.setText(translated)
-
-    def set_geometry_from_tuple(self, geometry):
-        if geometry:
-            x, y, w, h = geometry
-            self.setGeometry(x, y, w, h)
+        self.label.adjustSize()
+        min_w = min(self.label.width() + 8, 600)
+        min_h = min(self.label.height() + 8, 400)
+        self.setFixedSize(min_w, min_h)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.fillRect(self.rect(), self.bg_color)
+        painter.setPen(QColor(self.text_color))
+        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
         painter.end()
         super().paintEvent(event)
 
-    def show_overlay(self):
-        self.setVisible(True)
 
-    def hide_overlay(self):
-        self.setVisible(False)
+class OverlayManager:
+    def __init__(self, bg_color="#1a1a1a", text_color="#ffffff", font_size=16, opacity=200):
+        self.bg_color = bg_color
+        self.text_color = text_color
+        self.font_size = font_size
+        self.opacity = opacity
+        self._pool: list[BlockOverlay] = []
+        self._active: list[BlockOverlay] = []
+        self._region_origin = (0, 0)
+        self._visible = False
+
+    def set_region_origin(self, x: int, y: int):
+        self._region_origin = (x, y)
+
+    def _get_overlay(self) -> BlockOverlay:
+        if self._pool:
+            w = self._pool.pop()
+            w.setVisible(True)
+            return w
+        return BlockOverlay(
+            bg_color=self.bg_color,
+            text_color=self.text_color,
+            font_size=self.font_size,
+            opacity=self.opacity,
+        )
+
+    def update_blocks(self, blocks: list[dict]):
+        used_screens = set()
+        matched = []
+
+        for b in blocks:
+            bx, by, bw, bh = b["x"], b["y"], b["w"], b["h"]
+            ox, oy = self._region_origin
+            screen_rect = QRect(ox + bx, oy + by, max(bw, 20), max(bh, 20))
+
+            best = None
+            best_dist = 100
+            for i, existing in enumerate(self._active):
+                if i in used_screens:
+                    continue
+                er = existing.geometry()
+                cx1 = er.x() + er.width() // 2
+                cy1 = er.y() + er.height() // 2
+                cx2 = screen_rect.x() + screen_rect.width() // 2
+                cy2 = screen_rect.y() + screen_rect.height() // 2
+                dist = ((cx1 - cx2) ** 2 + (cy1 - cy2) ** 2) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    best = i
+
+            if best is not None:
+                w = self._active[best]
+                used_screens.add(best)
+            else:
+                w = self._get_overlay()
+
+            w.setGeometry(screen_rect)
+            w.set_text(b.get("original", b["text"]), b.get("translated", b["text"]))
+            if not self._visible:
+                w.show()
+            matched.append(w)
+
+        # Return unmatched to pool
+        remaining = []
+        for i, w in enumerate(self._active):
+            if i in used_screens:
+                remaining.append(w)
+            else:
+                w.setVisible(False)
+                self._pool.append(w)
+
+        self._active = matched
+
+    def show_all(self):
+        self._visible = True
+        for w in self._active:
+            w.show()
+
+    def hide_all(self):
+        self._visible = False
+        for w in self._active:
+            w.setVisible(False)
+
+    def clear(self):
+        self.hide_all()
+        for w in self._active:
+            self._pool.append(w)
+        self._active = []
+
+    def destroy(self):
+        self.clear()
+        for w in self._pool:
+            w.deleteLater()
+        self._pool = []

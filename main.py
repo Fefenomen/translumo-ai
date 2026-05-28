@@ -10,15 +10,15 @@ from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal, pyqtSlot, QThread, qIn
 
 import os
 from config import load_config, save_config, get_api_key
-from capture import select_region, select_monitor, capture_region_np, capture_monitor_np
-from ocr import ocr_image, text_significantly_different
+from capture import select_region, select_monitor, capture_region_np
+from ocr import ocr_image_blocks, text_significantly_different
 from translators import get_translator
-from overlay import TranslationOverlay
+from overlay import OverlayManager
 from settings_dialog import SettingsDialog
 
 
 class CaptureWorker(QObject):
-    text_ready = pyqtSignal(str)
+    blocks_ready = pyqtSignal(list)
     capture_failed = pyqtSignal()
 
     def __init__(self, cfg):
@@ -27,21 +27,17 @@ class CaptureWorker(QObject):
 
     @pyqtSlot()
     def request_capture(self):
-        mode = self.cfg.get("capture_mode", "region")
-        if mode == "monitor":
-            arr = capture_monitor_np()
-        else:
-            geometry = self.cfg.get("capture_region")
-            if not geometry:
-                return
-            arr = capture_region_np(geometry)
+        geometry = self.cfg.get("capture_region")
+        if not geometry:
+            return
+        arr = capture_region_np(geometry)
         if arr is None:
             self.capture_failed.emit()
             return
         ocr_lang = self.cfg.get("ocr_lang", "jpn+eng")
-        text = ocr_image(arr, lang=ocr_lang)
-        if text:
-            self.text_ready.emit(text)
+        blocks = ocr_image_blocks(arr, lang=ocr_lang)
+        if blocks:
+            self.blocks_ready.emit(blocks)
 
 
 class TranslumoAI:
@@ -56,12 +52,13 @@ class TranslumoAI:
         self.app = QApplication(sys.argv + ["-platform", "wayland"])
         self.app.setApplicationName("Translumo-AI")
         self.app.setQuitOnLastWindowClosed(False)
+        self.app.aboutToQuit.connect(self._cleanup)
 
         self.cfg = load_config()
-        self.overlay = None
+        self.overlay_mgr = None
         self.translator = None
         self.running = False
-        self.last_text = None
+        self.last_concat_text = None
         self.last_translation_time = 0
         self.min_interval_between_api = 1.0
         self.translation_cache = {}
@@ -69,6 +66,7 @@ class TranslumoAI:
         self.debounce_stable_count = 0
         self.debounce_threshold = 3
         self.capture_timer = QTimer()
+        self._region_origin = (0, 0)
 
         self._init_translator()
         self._init_worker()
@@ -89,7 +87,7 @@ class TranslumoAI:
         self.worker = CaptureWorker(self.cfg)
         self.worker_thread = QThread()
         self.worker.moveToThread(self.worker_thread)
-        self.worker.text_ready.connect(self._on_text_ready)
+        self.worker.blocks_ready.connect(self._on_blocks_ready)
         self.worker.capture_failed.connect(self._on_capture_failed)
         self.capture_timer.timeout.connect(self.worker.request_capture)
         self.worker_thread.start()
@@ -97,54 +95,73 @@ class TranslumoAI:
     def _on_capture_failed(self):
         self._tray_msg("Capture failed - check spectacle permissions", 2000)
 
-    def _on_text_ready(self, text):
-        if text == self.last_text:
+    def _on_blocks_ready(self, blocks):
+        concat = "|".join(b["text"] for b in blocks)
+        if concat == self.last_concat_text:
             self.debounce_stable_count += 1
             if self.debounce_stable_count >= self.debounce_threshold:
-                self._translate_async(text)
+                self._translate_blocks_async(blocks)
             return
-        if not text_significantly_different(self.last_text, text):
-            self.last_text = text
+        if not text_significantly_different(self.last_concat_text, concat):
+            self.last_concat_text = concat
             self.debounce_stable_count += 1
             if self.debounce_stable_count >= self.debounce_threshold:
-                self._translate_async(text)
+                self._translate_blocks_async(blocks)
             return
-        self.last_text = text
+        self.last_concat_text = concat
         self.debounce_stable_count = 1
 
-    def _translate_async(self, text):
+    def _translate_blocks_async(self, blocks):
         def do_translate():
-            now = time.time()
-            if now - self.last_translation_time < self.min_interval_between_api:
-                return
-
-            cached = self.translation_cache.get(text)
-            if cached is not None:
-                self._update_overlay(text, cached)
-                return
-
-            self.last_translation_time = now
-
             source = self.cfg.get("source_lang", "jpn")
             target = self.cfg.get("target_lang", "fra")
+            texts_to_translate = []
+            translations = {}
+            for b in blocks:
+                t = b["text"]
+                cached = self.translation_cache.get(t)
+                if cached is not None:
+                    translations[t] = cached
+                else:
+                    texts_to_translate.append(t)
 
-            result = self.translator.translate(text, source, target)
-            if result.success and result.translated_text:
-                self.translation_cache[text] = result.translated_text
-                if len(self.translation_cache) > self.cache_max_size:
-                    self.translation_cache.pop(next(iter(self.translation_cache)))
-                self._update_overlay(text, result.translated_text)
-            else:
-                err = result.error or "Unknown error"
-                self._tray_msg(f"Translation failed: {err[:60]}", 3000)
+            if texts_to_translate:
+                now = time.time()
+                if now - self.last_translation_time < self.min_interval_between_api:
+                    return
+                self.last_translation_time = now
+
+                batch_text = "\n---\n".join(texts_to_translate)
+                result = self.translator.translate(batch_text, source, target)
+                if result.success and result.translated_text:
+                    parts = result.translated_text.split("\n---\n")
+                    for i, t in enumerate(texts_to_translate):
+                        translated = parts[i].strip() if i < len(parts) else t
+                        self.translation_cache[t] = translated
+                        if len(self.translation_cache) > self.cache_max_size:
+                            self.translation_cache.pop(next(iter(self.translation_cache)))
+                        translations[t] = translated
+                else:
+                    for t in texts_to_translate:
+                        translations[t] = t
+
+            output = []
+            for b in blocks:
+                output.append({
+                    "x": b["x"], "y": b["y"], "w": b["w"], "h": b["h"],
+                    "original": b["text"],
+                    "translated": translations.get(b["text"], b["text"]),
+                })
+
+            self._update_overlay_blocks(output)
 
         thread = threading.Thread(target=do_translate, daemon=True)
         thread.start()
 
-    def _update_overlay(self, original, translated):
-        if self.overlay:
-            self.overlay.update_text(original, translated)
-            self.overlay.show_overlay()
+    def _update_overlay_blocks(self, blocks):
+        if self.overlay_mgr:
+            self.overlay_mgr.update_blocks(blocks)
+            self.overlay_mgr.show_all()
 
     def _tray_msg(self, msg, duration=2000):
         try:
@@ -190,7 +207,7 @@ class TranslumoAI:
 
     def _select_region_startup(self):
         if self.cfg.get("capture_region"):
-            self._setup_overlay(self.cfg["capture_region"])
+            self._setup_overlay_manager(self.cfg["capture_region"])
             self.start_translation()
 
     def select_new_region(self):
@@ -201,7 +218,7 @@ class TranslumoAI:
         if geometry:
             self.cfg["capture_region"] = geometry
             save_config(self.cfg)
-            self._setup_overlay(geometry)
+            self._setup_overlay_manager(geometry)
             self.start_translation()
         else:
             self._tray_msg("Region selection cancelled.", 3000)
@@ -214,22 +231,23 @@ class TranslumoAI:
         if geometry:
             self.cfg["capture_region"] = geometry
             save_config(self.cfg)
-            self._setup_overlay(geometry)
+            self._setup_overlay_manager(geometry)
             self.start_translation()
         else:
             self._tray_msg("Monitor selection cancelled.", 3000)
 
-    def _setup_overlay(self, geometry):
-        if self.overlay:
-            self.overlay.hide_overlay()
-            self.overlay.deleteLater()
-        self.overlay = TranslationOverlay(
-            geometry=geometry,
+    def _setup_overlay_manager(self, geometry):
+        if self.overlay_mgr:
+            self.overlay_mgr.destroy()
+        x, y, w, h = geometry
+        self._region_origin = (x, y)
+        self.overlay_mgr = OverlayManager(
             bg_color=self.cfg.get("overlay_bg_color", "#1a1a1a"),
             text_color=self.cfg.get("overlay_text_color", "#ffffff"),
             font_size=self.cfg.get("overlay_font_size", 16),
-            opacity=self.cfg.get("overlay_opacity", 180),
+            opacity=self.cfg.get("overlay_opacity", 200),
         )
+        self.overlay_mgr.set_region_origin(x, y)
 
     def toggle_translation(self):
         if self.running:
@@ -238,11 +256,11 @@ class TranslumoAI:
             self.start_translation()
 
     def start_translation(self):
-        if not self.overlay:
+        if not self.overlay_mgr:
             self._tray_msg("Please select a region first.", 3000)
             return
         self.running = True
-        self.last_text = None
+        self.last_concat_text = None
         interval = self.cfg.get("capture_interval_ms", 800)
         self.capture_timer.start(interval)
         provider = self.cfg.get("provider", "ollama")
@@ -250,15 +268,13 @@ class TranslumoAI:
         label = f"{provider}{f' ({model})' if model else ''}"
         mode = self.cfg.get("capture_mode", "region")
         self.tray.setToolTip(f"Translumo-AI — {label} — {mode.upper()} — ACTIVE")
-        self.overlay.set_active(True)
         self._tray_msg(f"Translation started ({label}, every {interval}ms).", 2000)
 
     def stop_translation(self):
         self.running = False
         self.capture_timer.stop()
-        if self.overlay:
-            self.overlay.hide_overlay()
-            self.overlay.set_active(False)
+        if self.overlay_mgr:
+            self.overlay_mgr.hide_all()
         provider = self.cfg.get("provider", "ollama")
         model = self.cfg.get("ollama_model", "aya:8b") if provider == "ollama" else ""
         label = f"{provider}{f' ({model})' if model else ''}"
@@ -274,10 +290,12 @@ class TranslumoAI:
         if dialog.exec_():
             self.cfg = load_config()
             self._init_translator()
-            if self.overlay:
+            if self.overlay_mgr:
                 geometry = self.cfg.get("capture_region")
                 if geometry:
-                    self.overlay.set_geometry_from_tuple(geometry)
+                    x, y, w, h = geometry
+                    self._region_origin = (x, y)
+                    self.overlay_mgr.set_region_origin(x, y)
                 if was_running:
                     self.start_translation()
 
@@ -285,9 +303,12 @@ class TranslumoAI:
         self.stop_translation()
         self.worker_thread.quit()
         self.worker_thread.wait()
-        if self.overlay:
-            self.overlay.hide_overlay()
+        self._cleanup()
         self.app.quit()
+
+    def _cleanup(self):
+        if self.overlay_mgr:
+            self.overlay_mgr.destroy()
 
     def run(self):
         sys.exit(self.app.exec_())
