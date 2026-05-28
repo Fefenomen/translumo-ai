@@ -36,8 +36,11 @@ def load_config() -> dict:
             cfg.setdefault(k, v)
         api_providers = {"openai", "anthropic", "mistral", "gemini"}
         provider = cfg.get("provider", "ollama")
-        if provider in api_providers and not cfg.get("api_keys", {}).get(provider, ""):
+        if provider in api_providers:
             cfg["provider"] = "ollama"
+            save_config(cfg)
+        if cfg.get("provider") == "ollama" and cfg.get("ollama_model") not in (None, "aya:8b"):
+            cfg["ollama_model"] = "aya:8b"
             save_config(cfg)
         return cfg
     return dict(DEFAULT_CONFIG)

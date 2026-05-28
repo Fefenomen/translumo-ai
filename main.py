@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QAction
 )
 from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import QObject, pyqtSignal, qInstallMessageHandler
+from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal, pyqtSlot, QThread, qInstallMessageHandler
 
 import os
 from config import load_config, save_config, get_api_key
@@ -24,34 +24,20 @@ class CaptureWorker(QObject):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
-        self._running = False
-        self._event = threading.Event()
-        self._interval = 800
 
-    def start(self):
-        self._running = True
-        threading.Thread(target=self._loop, daemon=True).start()
-
-    def stop(self):
-        self._running = False
-        self._event.set()
-
-    def set_interval(self, ms):
-        self._interval = ms
-
-    def _loop(self):
-        while self._running:
-            geometry = self.cfg.get("capture_region")
-            if geometry:
-                arr = capture_region_np(geometry)
-                if arr is None:
-                    self.capture_failed.emit()
-                else:
-                    ocr_lang = self.cfg.get("ocr_lang", "jpn+eng")
-                    text = ocr_image(arr, lang=ocr_lang)
-                    if text:
-                        self.text_ready.emit(text)
-            self._event.wait(self._interval / 1000.0)
+    @pyqtSlot()
+    def request_capture(self):
+        geometry = self.cfg.get("capture_region")
+        if not geometry:
+            return
+        arr = capture_region_np(geometry)
+        if arr is None:
+            self.capture_failed.emit()
+            return
+        ocr_lang = self.cfg.get("ocr_lang", "jpn+eng")
+        text = ocr_image(arr, lang=ocr_lang)
+        if text:
+            self.text_ready.emit(text)
 
 
 class TranslumoAI:
@@ -78,6 +64,7 @@ class TranslumoAI:
         self.cache_max_size = 100
         self.debounce_stable_count = 0
         self.debounce_threshold = 3
+        self.capture_timer = QTimer()
 
         self._init_translator()
         self._init_worker()
@@ -96,8 +83,12 @@ class TranslumoAI:
 
     def _init_worker(self):
         self.worker = CaptureWorker(self.cfg)
+        self.worker_thread = QThread()
+        self.worker.moveToThread(self.worker_thread)
         self.worker.text_ready.connect(self._on_text_ready)
         self.worker.capture_failed.connect(self._on_capture_failed)
+        self.capture_timer.timeout.connect(self.worker.request_capture)
+        self.worker_thread.start()
 
     def _on_capture_failed(self):
         self._tray_msg("Capture failed - check spectacle permissions", 2000)
@@ -227,8 +218,7 @@ class TranslumoAI:
         self.running = True
         self.last_text = None
         interval = self.cfg.get("capture_interval_ms", 800)
-        self.worker.set_interval(interval)
-        self.worker.start()
+        self.capture_timer.start(interval)
         provider = self.cfg.get("provider", "ollama")
         model = self.cfg.get("ollama_model", "aya:8b") if provider == "ollama" else ""
         label = f"{provider}{f' ({model})' if model else ''}"
@@ -237,7 +227,7 @@ class TranslumoAI:
 
     def stop_translation(self):
         self.running = False
-        self.worker.stop()
+        self.capture_timer.stop()
         if self.overlay:
             self.overlay.hide_overlay()
         self._tray_msg("Translation stopped.", 2000)
@@ -259,6 +249,8 @@ class TranslumoAI:
 
     def quit(self):
         self.stop_translation()
+        self.worker_thread.quit()
+        self.worker_thread.wait()
         if self.overlay:
             self.overlay.hide_overlay()
         self.app.quit()
