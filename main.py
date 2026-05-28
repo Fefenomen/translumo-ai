@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QAction
 )
 from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import QTimer, QObject, pyqtSignal, QThread
+from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal, pyqtSlot, QThread
 
 import os
 from config import load_config, save_config, get_api_key
@@ -20,26 +20,27 @@ from settings_dialog import SettingsDialog
 class CaptureWorker(QObject):
     text_ready = pyqtSignal(str)
     capture_failed = pyqtSignal()
+    sig_start = pyqtSignal()
+    sig_stop = pyqtSignal()
+    sig_set_interval = pyqtSignal(int)
 
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
         self.timer = QTimer()
         self.timer.timeout.connect(self._capture)
+        self.sig_start.connect(self.timer.start, Qt.QueuedConnection)
+        self.sig_stop.connect(self.timer.stop, Qt.QueuedConnection)
+        self.sig_set_interval.connect(self._set_interval_slot, Qt.QueuedConnection)
 
-    def set_interval(self, ms):
+    @pyqtSlot(int)
+    def _set_interval_slot(self, ms):
         was_running = self.timer.isActive()
         if was_running:
             self.timer.stop()
         self.timer.setInterval(ms)
         if was_running:
             self.timer.start()
-
-    def start(self):
-        self.timer.start()
-
-    def stop(self):
-        self.timer.stop()
 
     def _capture(self):
         geometry = self.cfg.get("capture_region")
@@ -224,13 +225,17 @@ class TranslumoAI:
         self.running = True
         self.last_text = None
         interval = self.cfg.get("capture_interval_ms", 800)
-        self.worker.set_interval(interval)
-        self.worker.start()
-        self._tray_msg(f"Translation started (every {interval}ms).", 2000)
+        self.worker.sig_set_interval.emit(interval)
+        self.worker.sig_start.emit()
+        provider = self.cfg.get("provider", "ollama")
+        model = self.cfg.get("ollama_model", "aya:8b") if provider == "ollama" else ""
+        label = f"{provider}{f' ({model})' if model else ''}"
+        self.tray.setToolTip(f"Translumo-AI — {label}")
+        self._tray_msg(f"Translation started ({label}, every {interval}ms).", 2000)
 
     def stop_translation(self):
         self.running = False
-        self.worker.stop()
+        self.worker.sig_stop.emit()
         if self.overlay:
             self.overlay.hide_overlay()
         self._tray_msg("Translation stopped.", 2000)
