@@ -13,6 +13,13 @@ def _extract_error(resp):
         return resp.reason
 
 
+_BATCH_SYSTEM = (
+    "You are a translator. Multiple text blocks are separated by --- . "
+    "Translate each block from {source} to {target}. "
+    "Reply ONLY with the translations in the same order, using the same --- separators. No explanations."
+)
+
+
 class AnthropicTranslator(Translator):
     def __init__(self, api_key: str = None, model: str = "claude-3-5-haiku-latest", **kwargs):
         super().__init__(api_key, **kwargs)
@@ -33,7 +40,7 @@ class AnthropicTranslator(Translator):
                 json={
                     "model": self.model,
                     "max_tokens": 1024,
-                    "system": f"You are a translator. Translate {source_lang} text to {target_lang}. Reply ONLY with the translation, no explanations.",
+                    "system": _BATCH_SYSTEM.format(source=source_lang, target=target_lang),
                     "messages": [{"role": "user", "content": text}],
                 },
                 timeout=30,

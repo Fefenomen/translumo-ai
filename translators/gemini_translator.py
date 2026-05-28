@@ -13,6 +13,13 @@ def _extract_error(resp):
         return resp.reason
 
 
+_BATCH_PROMPT = (
+    "Translate the following text from {source} to {target}. "
+    "If multiple blocks are separated by --- , translate each block and keep the same --- separators. "
+    "Reply ONLY with the translations. No explanations.\n\n{text}"
+)
+
+
 class GeminiTranslator(Translator):
     def __init__(self, api_key: str = None, model: str = "gemini-2.0-flash", **kwargs):
         super().__init__(api_key, **kwargs)
@@ -34,7 +41,7 @@ class GeminiTranslator(Translator):
                         {
                             "parts": [
                                 {
-                                    "text": f"Translate the following text from {source_lang} to {target_lang}. Reply ONLY with the translation, no explanations. Text: {text}"
+                                    "text": _BATCH_PROMPT.format(source=source_lang, target=target_lang, text=text)
                                 }
                             ]
                         }

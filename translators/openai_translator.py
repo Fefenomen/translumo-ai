@@ -13,6 +13,13 @@ def _extract_error(resp):
         return resp.reason
 
 
+_BATCH_SYSTEM = (
+    "You are a translator. Multiple text blocks are separated by --- . "
+    "Translate each block from {source} to {target}. "
+    "Reply ONLY with the translations in the same order, using the same --- separators. No explanations."
+)
+
+
 class OpenAITranslator(Translator):
     def __init__(self, api_key: str = None, model: str = "gpt-4o", **kwargs):
         super().__init__(api_key, **kwargs)
@@ -34,10 +41,7 @@ class OpenAITranslator(Translator):
                     "messages": [
                         {
                             "role": "system",
-                            "content": (
-                                f"You are a translator. Translate {source_lang} text to {target_lang}. "
-                                f"Reply ONLY with the translation, no explanations."
-                            ),
+                            "content": _BATCH_SYSTEM.format(source=source_lang, target=target_lang),
                         },
                         {"role": "user", "content": text},
                     ],

@@ -13,6 +13,13 @@ def _extract_error(resp):
         return resp.reason
 
 
+_BATCH_SYSTEM = (
+    "You are a translator. Multiple text blocks are separated by --- . "
+    "Translate each block from {source} to {target}. "
+    "Reply ONLY with the translations in the same order, using the same --- separators. No explanations."
+)
+
+
 class MistralTranslator(Translator):
     def __init__(self, api_key: str = None, model: str = "mistral-large-latest", **kwargs):
         super().__init__(api_key, **kwargs)
@@ -34,7 +41,7 @@ class MistralTranslator(Translator):
                     "messages": [
                         {
                             "role": "system",
-                            "content": f"You are a translator. Translate {source_lang} text to {target_lang}. Reply ONLY with the translation, no explanations.",
+                            "content": _BATCH_SYSTEM.format(source=source_lang, target=target_lang),
                         },
                         {"role": "user", "content": text},
                     ],

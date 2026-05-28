@@ -11,10 +11,21 @@ from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal, pyqtSlot, QThread, qIn
 import os
 from config import load_config, save_config, get_api_key
 from capture import select_region, select_monitor, capture_region_np
-from ocr import ocr_image_blocks, text_significantly_different
+from ocr import ocr_image_blocks, text_significantly_different, normalize_text
 from translators import get_translator
 from overlay import OverlayManager
 from settings_dialog import SettingsDialog
+
+DEBUG = False
+
+
+def debug_log(*args):
+    if DEBUG:
+        print("[DEBUG]", *args, flush=True)
+
+
+class _SignalBridge(QObject):
+    blocks_translated = pyqtSignal(list)
 
 
 class CaptureWorker(QObject):
@@ -37,6 +48,7 @@ class CaptureWorker(QObject):
         ocr_lang = self.cfg.get("ocr_lang", "jpn+eng")
         blocks = ocr_image_blocks(arr, lang=ocr_lang)
         if blocks:
+            debug_log("OCR blocks:", [(b["text"][:30], b["x"], b["y"]) for b in blocks])
             self.blocks_ready.emit(blocks)
 
 
@@ -48,6 +60,9 @@ class TranslumoAI:
             self._original_handler(msg_type, context, message)
 
     def __init__(self):
+        global DEBUG
+        DEBUG = "--debug" in sys.argv
+
         self._original_handler = qInstallMessageHandler(self._qt_msg_filter)
         self.app = QApplication(sys.argv + ["-platform", "wayland"])
         self.app.setApplicationName("Translumo-AI")
@@ -68,9 +83,13 @@ class TranslumoAI:
         self.capture_timer = QTimer()
         self._region_origin = (0, 0)
 
+        self._bridge = _SignalBridge()
+        self._bridge.blocks_translated.connect(self._update_overlay_blocks)
+
         self._init_translator()
         self._init_worker()
         self._init_tray()
+        debug_log("Startup complete, config:", self.cfg.get("capture_region"), self.cfg.get("provider"))
         self._select_region_startup()
 
     def _init_translator(self):
@@ -82,6 +101,7 @@ class TranslumoAI:
             ollama_url=self.cfg.get("ollama_url", "http://localhost:11434"),
             ollama_model=self.cfg.get("ollama_model", "aya:8b"),
         )
+        debug_log("Translator initialized:", provider)
 
     def _init_worker(self):
         self.worker = CaptureWorker(self.cfg)
@@ -96,18 +116,21 @@ class TranslumoAI:
         self._tray_msg("Capture failed - check spectacle permissions", 2000)
 
     def _on_blocks_ready(self, blocks):
-        concat = "|".join(b["text"] for b in blocks)
+        concat = normalize_text("|".join(b["text"] for b in blocks))
         if concat == self.last_concat_text:
             self.debounce_stable_count += 1
+            debug_log(f"Debounce stable ({self.debounce_stable_count}/{self.debounce_threshold})")
             if self.debounce_stable_count >= self.debounce_threshold:
                 self._translate_blocks_async(blocks)
             return
         if not text_significantly_different(self.last_concat_text, concat):
             self.last_concat_text = concat
             self.debounce_stable_count += 1
+            debug_log(f"Debounce similar ({self.debounce_stable_count}/{self.debounce_threshold})")
             if self.debounce_stable_count >= self.debounce_threshold:
                 self._translate_blocks_async(blocks)
             return
+        debug_log("Debounce reset (text changed)")
         self.last_concat_text = concat
         self.debounce_stable_count = 1
 
@@ -122,26 +145,35 @@ class TranslumoAI:
                 cached = self.translation_cache.get(t)
                 if cached is not None:
                     translations[t] = cached
+                    debug_log("Cache hit:", t[:30])
                 else:
                     texts_to_translate.append(t)
 
             if texts_to_translate:
                 now = time.time()
                 if now - self.last_translation_time < self.min_interval_between_api:
+                    debug_log("Skipping - rate limited")
                     return
                 self.last_translation_time = now
 
                 batch_text = "\n---\n".join(texts_to_translate)
+                debug_log(f"Translating {len(texts_to_translate)} blocks...")
+                for t in texts_to_translate:
+                    debug_log("  input:", repr(t[:60]))
                 result = self.translator.translate(batch_text, source, target)
                 if result.success and result.translated_text:
+                    debug_log("Translation result:", repr(result.translated_text[:200]))
                     parts = result.translated_text.split("\n---\n")
                     for i, t in enumerate(texts_to_translate):
                         translated = parts[i].strip() if i < len(parts) else t
+                        if not translated:
+                            translated = t
                         self.translation_cache[t] = translated
                         if len(self.translation_cache) > self.cache_max_size:
                             self.translation_cache.pop(next(iter(self.translation_cache)))
                         translations[t] = translated
                 else:
+                    debug_log("Translation failed:", result.error)
                     for t in texts_to_translate:
                         translations[t] = t
 
@@ -152,14 +184,17 @@ class TranslumoAI:
                     "original": b["text"],
                     "translated": translations.get(b["text"], b["text"]),
                 })
+                debug_log("  block:", output[-1]["original"][:30], "→", output[-1]["translated"][:30])
 
-            self._update_overlay_blocks(output)
+            self._bridge.blocks_translated.emit(output)
 
         thread = threading.Thread(target=do_translate, daemon=True)
         thread.start()
 
+    @pyqtSlot(list)
     def _update_overlay_blocks(self, blocks):
         if self.overlay_mgr:
+            debug_log("Updating overlay with", len(blocks), "blocks")
             self.overlay_mgr.update_blocks(blocks)
             self.overlay_mgr.show_all()
 
@@ -269,6 +304,7 @@ class TranslumoAI:
         mode = self.cfg.get("capture_mode", "region")
         self.tray.setToolTip(f"Translumo-AI — {label} — {mode.upper()} — ACTIVE")
         self._tray_msg(f"Translation started ({label}, every {interval}ms).", 2000)
+        debug_log("Translation started, interval:", interval)
 
     def stop_translation(self):
         self.running = False

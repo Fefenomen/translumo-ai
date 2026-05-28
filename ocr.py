@@ -1,3 +1,4 @@
+import re
 from typing import Optional
 import cv2
 import numpy as np
@@ -85,7 +86,17 @@ def ocr_image_blocks(img: np.ndarray, lang: str = "jpn+eng") -> list[dict]:
         return []
 
 
+def normalize_text(text: Optional[str]) -> Optional[str]:
+    if text is None:
+        return None
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s*\|\s*", "|", text)
+    return text.strip()
+
+
 def text_significantly_different(old: Optional[str], new: Optional[str]) -> bool:
+    old = normalize_text(old)
+    new = normalize_text(new)
     if old is None and new is None:
         return False
     if old is None or new is None:
