@@ -19,7 +19,7 @@ Prints OCR output, translation input/output, debounce state to console.
 
 ## Common bugs to watch for
 
-1. **Widget creation outside main thread** — All `QWidget` creation/modification must happen in the main thread. Use `pyqtSignal(list)` + `@pyqtSlot(list)` for cross-thread overlay updates.
+1. **Widget creation outside main thread** — All `QWidget` creation/modification must happen in the main thread. Use `pyqtSignal(list)` + `lambda blocks: handler(blocks)` (pas `@pyqtSlot` car la classe réceptrice n'est pas un QObject).
 
 2. **Debounce never triggers** — `text_significantly_different()` compares normalized text. If OCR returns unstable whitespace/newlines, `normalize_text()` handles it. If blocks change count/position each frame, the concat string changes and debounce resets.
 

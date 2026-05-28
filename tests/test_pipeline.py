@@ -197,3 +197,33 @@ def test_batch_parse_fallback():
 
     assert translations["hello"] == "bonjour"
     assert translations["world"] == "world"
+
+
+def test_launch_smoke(qapp):
+    from main import TranslumoAI
+    app = TranslumoAI()
+    assert app.translator is not None
+    assert app._bridge is not None
+    app._cleanup()
+    app.worker_thread.quit()
+    app.worker_thread.wait()
+
+
+def test_signal_bridge_connection(qapp):
+    from PyQt5.QtCore import QObject, pyqtSignal
+
+    class _Bridge(QObject):
+        sig = pyqtSignal(list)
+
+    bridge = _Bridge()
+    results = []
+
+    def handler(blocks):
+        results.extend(blocks)
+
+    bridge.sig.connect(lambda b: handler(b))
+    bridge.sig.emit([{"text": "hello"}, {"text": "world"}])
+
+    assert len(results) == 2
+    assert results[0]["text"] == "hello"
+    assert results[1]["text"] == "world"

@@ -84,7 +84,7 @@ class TranslumoAI:
         self._region_origin = (0, 0)
 
         self._bridge = _SignalBridge()
-        self._bridge.blocks_translated.connect(self._update_overlay_blocks)
+        self._bridge.blocks_translated.connect(lambda blocks: self._update_overlay_blocks(blocks))
 
         self._init_translator()
         self._init_worker()
