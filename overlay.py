@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QPainter, QColor, QFont, QBrush, QPen
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPainter, QColor
 
 
 class TranslationOverlay(QWidget):
@@ -10,16 +10,15 @@ class TranslationOverlay(QWidget):
         self.bg_color = QColor(bg_color)
         self.text_color = QColor(text_color)
         self.bg_color.setAlpha(opacity)
-        self.font_size = font_size
         self.translated_text = ""
         self.original_text = ""
-        self.is_visible = False
 
         self.setWindowFlags(
             Qt.FramelessWindowHint
             | Qt.WindowStaysOnTopHint
             | Qt.Tool
             | Qt.WindowDoesNotAcceptFocus
+            | Qt.X11BypassWindowManagerHint
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
@@ -63,9 +62,7 @@ class TranslationOverlay(QWidget):
         super().paintEvent(event)
 
     def show_overlay(self):
-        self.is_visible = True
         self.setVisible(True)
 
     def hide_overlay(self):
-        self.is_visible = False
-        self.hide()
+        self.setVisible(False)

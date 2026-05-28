@@ -3,18 +3,56 @@ import time
 import threading
 
 from PyQt5.QtWidgets import (
-    QApplication, QSystemTrayIcon, QMenu, QAction, QMessageBox
+    QApplication, QSystemTrayIcon, QMenu, QAction
 )
-from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtCore import QTimer
+from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import QTimer, QObject, pyqtSignal, QThread
 
 import os
 from config import load_config, save_config, get_api_key
 from capture import select_region, capture_region_np
 from ocr import ocr_image, text_significantly_different
-from translators import get_translator, TRANSLATOR_MAP
+from translators import get_translator
 from overlay import TranslationOverlay
 from settings_dialog import SettingsDialog
+
+
+class CaptureWorker(QObject):
+    text_ready = pyqtSignal(str)
+    capture_failed = pyqtSignal()
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.timer = QTimer()
+        self.timer.timeout.connect(self._capture)
+
+    def set_interval(self, ms):
+        was_running = self.timer.isActive()
+        if was_running:
+            self.timer.stop()
+        self.timer.setInterval(ms)
+        if was_running:
+            self.timer.start()
+
+    def start(self):
+        self.timer.start()
+
+    def stop(self):
+        self.timer.stop()
+
+    def _capture(self):
+        geometry = self.cfg.get("capture_region")
+        if not geometry:
+            return
+        arr = capture_region_np(geometry)
+        if arr is None:
+            self.capture_failed.emit()
+            return
+        ocr_lang = self.cfg.get("ocr_lang", "jpn+eng")
+        text = ocr_image(arr, lang=ocr_lang)
+        if text:
+            self.text_ready.emit(text)
 
 
 class TranslumoAI:
@@ -27,14 +65,12 @@ class TranslumoAI:
         self.overlay = None
         self.translator = None
         self.running = False
-        self.capture_timer = QTimer()
-        self.capture_timer.timeout.connect(self.capture_and_translate)
-
         self.last_text = None
         self.last_translation_time = 0
         self.min_interval_between_api = 1.0
 
         self._init_translator()
+        self._init_worker()
         self._init_tray()
         self._select_region_startup()
 
@@ -47,6 +83,54 @@ class TranslumoAI:
             ollama_url=self.cfg.get("ollama_url", "http://localhost:11434"),
             ollama_model=self.cfg.get("ollama_model", "llama3"),
         )
+
+    def _init_worker(self):
+        self.worker = CaptureWorker(self.cfg)
+        self.worker_thread = QThread()
+        self.worker.moveToThread(self.worker_thread)
+        self.worker.text_ready.connect(self._on_text_ready)
+        self.worker.capture_failed.connect(self._on_capture_failed)
+        self.worker_thread.start()
+
+    def _on_capture_failed(self):
+        self._tray_msg("Capture failed - check spectacle permissions", 2000)
+
+    def _on_text_ready(self, text):
+        if not text_significantly_different(self.last_text, text):
+            return
+        self.last_text = text
+        self._translate_async(text)
+
+    def _translate_async(self, text):
+        def do_translate():
+            now = time.time()
+            if now - self.last_translation_time < self.min_interval_between_api:
+                return
+            self.last_translation_time = now
+
+            source = self.cfg.get("source_lang", "jpn")
+            target = self.cfg.get("target_lang", "fra")
+
+            result = self.translator.translate(text, source, target)
+            if result.success and result.translated_text:
+                self._update_overlay(text, result.translated_text)
+            else:
+                err = result.error or "Unknown error"
+                self._tray_msg(f"Translation failed: {err[:60]}", 3000)
+
+        thread = threading.Thread(target=do_translate, daemon=True)
+        thread.start()
+
+    def _update_overlay(self, original, translated):
+        if self.overlay:
+            self.overlay.update_text(original, translated)
+            self.overlay.show_overlay()
+
+    def _tray_msg(self, msg, duration=2000):
+        try:
+            self.tray.showMessage("Translumo-AI", msg, QSystemTrayIcon.Information, duration)
+        except Exception:
+            pass
 
     def _init_tray(self):
         icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
@@ -78,7 +162,7 @@ class TranslumoAI:
 
         self.tray.setContextMenu(menu)
         self.tray.show()
-        self.tray.showMessage("Translumo-AI", "Select a region to start translation.", QSystemTrayIcon.Information, 3000)
+        self._tray_msg("Select a region to start translation.", 3000)
 
     def _select_region_startup(self):
         if self.cfg.get("capture_region"):
@@ -95,10 +179,7 @@ class TranslumoAI:
             self._setup_overlay(geometry)
             self.start_translation()
         else:
-            self.tray.showMessage(
-                "Translumo-AI", "Region selection cancelled or failed.",
-                QSystemTrayIcon.Warning, 3000
-            )
+            self._tray_msg("Region selection cancelled.", 3000)
 
     def _setup_overlay(self, geometry):
         if self.overlay:
@@ -120,73 +201,26 @@ class TranslumoAI:
 
     def start_translation(self):
         if not self.overlay:
-            self.tray.showMessage(
-                "Translumo-AI", "Please select a region first.",
-                QSystemTrayIcon.Warning, 3000
-            )
+            self._tray_msg("Please select a region first.", 3000)
             return
         self.running = True
         self.last_text = None
         interval = self.cfg.get("capture_interval_ms", 800)
-        self.capture_timer.start(interval)
-        self.tray.showMessage(
-            "Translumo-AI", f"Translation started (every {interval}ms).",
-            QSystemTrayIcon.Information, 2000
-        )
+        self.worker.set_interval(interval)
+        self.worker.start()
+        self._tray_msg(f"Translation started (every {interval}ms).", 2000)
 
     def stop_translation(self):
         self.running = False
-        self.capture_timer.stop()
+        self.worker.stop()
         if self.overlay:
             self.overlay.hide_overlay()
-        self.tray.showMessage(
-            "Translumo-AI", "Translation stopped.",
-            QSystemTrayIcon.Information, 2000
-        )
-
-    def capture_and_translate(self):
-        geometry = self.cfg.get("capture_region")
-        if not geometry:
-            return
-
-        arr = capture_region_np(geometry)
-        if arr is None:
-            return
-
-        ocr_lang = self.cfg.get("ocr_lang", "jpn+eng")
-        text = ocr_image(arr, lang=ocr_lang)
-        if not text:
-            return
-
-        if not text_significantly_different(self.last_text, text):
-            return
-
-        self.last_text = text
-        self._translate_async(text)
-
-    def _translate_async(self, text):
-        def do_translate():
-            now = time.time()
-            if now - self.last_translation_time < self.min_interval_between_api:
-                return
-            self.last_translation_time = now
-
-            source = self.cfg.get("source_lang", "jpn")
-            target = self.cfg.get("target_lang", "fra")
-
-            result = self.translator.translate(text, source, target)
-            if result.success and result.translated_text:
-                self._update_overlay(text, result.translated_text)
-
-        thread = threading.Thread(target=do_translate, daemon=True)
-        thread.start()
-
-    def _update_overlay(self, original, translated):
-        if self.overlay:
-            self.overlay.update_text(original, translated)
-            self.overlay.show_overlay()
+        self._tray_msg("Translation stopped.", 2000)
 
     def open_settings(self):
+        was_running = self.running
+        if was_running:
+            self.stop_translation()
         dialog = SettingsDialog()
         if dialog.exec_():
             self.cfg = load_config()
@@ -195,9 +229,13 @@ class TranslumoAI:
                 geometry = self.cfg.get("capture_region")
                 if geometry:
                     self.overlay.set_geometry_from_tuple(geometry)
+                if was_running:
+                    self.start_translation()
 
     def quit(self):
         self.stop_translation()
+        self.worker_thread.quit()
+        self.worker_thread.wait()
         if self.overlay:
             self.overlay.hide_overlay()
         self.app.quit()
