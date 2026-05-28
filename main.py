@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QAction
 )
 from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtCore import QObject, pyqtSignal, qInstallMessageHandler
 
 import os
 from config import load_config, save_config, get_api_key
@@ -55,7 +55,14 @@ class CaptureWorker(QObject):
 
 
 class TranslumoAI:
+    def _qt_msg_filter(self, msg_type, context, message):
+        if "Timer" in message and ("cannot be started" in message or "cannot be stopped" in message):
+            return
+        if self._original_handler:
+            self._original_handler(msg_type, context, message)
+
     def __init__(self):
+        self._original_handler = qInstallMessageHandler(self._qt_msg_filter)
         self.app = QApplication(sys.argv + ["-platform", "wayland"])
         self.app.setApplicationName("Translumo-AI")
         self.app.setQuitOnLastWindowClosed(False)
