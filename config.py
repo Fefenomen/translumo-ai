@@ -21,6 +21,7 @@ DEFAULT_CONFIG = {
     "ollama_url": "http://localhost:11434",
     "ollama_model": "aya:8b",
     "overlay_opacity": 180,
+    "capture_mode": "region",
     "overlay_font_size": 16,
     "overlay_bg_color": "#1a1a1a",
     "overlay_text_color": "#ffffff",

@@ -10,7 +10,7 @@ from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal, pyqtSlot, QThread, qIn
 
 import os
 from config import load_config, save_config, get_api_key
-from capture import select_region, capture_region_np
+from capture import select_region, select_monitor, capture_region_np, capture_monitor_np
 from ocr import ocr_image, text_significantly_different
 from translators import get_translator
 from overlay import TranslationOverlay
@@ -27,10 +27,14 @@ class CaptureWorker(QObject):
 
     @pyqtSlot()
     def request_capture(self):
-        geometry = self.cfg.get("capture_region")
-        if not geometry:
-            return
-        arr = capture_region_np(geometry)
+        mode = self.cfg.get("capture_mode", "region")
+        if mode == "monitor":
+            arr = capture_monitor_np()
+        else:
+            geometry = self.cfg.get("capture_region")
+            if not geometry:
+                return
+            arr = capture_region_np(geometry)
         if arr is None:
             self.capture_failed.emit()
             return
@@ -100,6 +104,10 @@ class TranslumoAI:
                 self._translate_async(text)
             return
         if not text_significantly_different(self.last_text, text):
+            self.last_text = text
+            self.debounce_stable_count += 1
+            if self.debounce_stable_count >= self.debounce_threshold:
+                self._translate_async(text)
             return
         self.last_text = text
         self.debounce_stable_count = 1
@@ -162,6 +170,10 @@ class TranslumoAI:
         select_region_action.triggered.connect(self.select_new_region)
         menu.addAction(select_region_action)
 
+        select_monitor_action = QAction("Select Monitor", menu)
+        select_monitor_action.triggered.connect(self.select_new_monitor)
+        menu.addAction(select_monitor_action)
+
         settings_action = QAction("Settings", menu)
         settings_action.triggered.connect(self.open_settings)
         menu.addAction(settings_action)
@@ -184,6 +196,7 @@ class TranslumoAI:
     def select_new_region(self):
         if self.running:
             self.stop_translation()
+        self.cfg["capture_mode"] = "region"
         geometry = select_region()
         if geometry:
             self.cfg["capture_region"] = geometry
@@ -192,6 +205,19 @@ class TranslumoAI:
             self.start_translation()
         else:
             self._tray_msg("Region selection cancelled.", 3000)
+
+    def select_new_monitor(self):
+        if self.running:
+            self.stop_translation()
+        self.cfg["capture_mode"] = "monitor"
+        geometry = select_monitor()
+        if geometry:
+            self.cfg["capture_region"] = geometry
+            save_config(self.cfg)
+            self._setup_overlay(geometry)
+            self.start_translation()
+        else:
+            self._tray_msg("Monitor selection cancelled.", 3000)
 
     def _setup_overlay(self, geometry):
         if self.overlay:
@@ -222,7 +248,9 @@ class TranslumoAI:
         provider = self.cfg.get("provider", "ollama")
         model = self.cfg.get("ollama_model", "aya:8b") if provider == "ollama" else ""
         label = f"{provider}{f' ({model})' if model else ''}"
-        self.tray.setToolTip(f"Translumo-AI — {label}")
+        mode = self.cfg.get("capture_mode", "region")
+        self.tray.setToolTip(f"Translumo-AI — {label} — {mode.upper()} — ACTIVE")
+        self.overlay.set_active(True)
         self._tray_msg(f"Translation started ({label}, every {interval}ms).", 2000)
 
     def stop_translation(self):
@@ -230,6 +258,12 @@ class TranslumoAI:
         self.capture_timer.stop()
         if self.overlay:
             self.overlay.hide_overlay()
+            self.overlay.set_active(False)
+        provider = self.cfg.get("provider", "ollama")
+        model = self.cfg.get("ollama_model", "aya:8b") if provider == "ollama" else ""
+        label = f"{provider}{f' ({model})' if model else ''}"
+        mode = self.cfg.get("capture_mode", "region")
+        self.tray.setToolTip(f"Translumo-AI — {label} — {mode.upper()} — IDLE")
         self._tray_msg("Translation stopped.", 2000)
 
     def open_settings(self):

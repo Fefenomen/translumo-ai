@@ -31,6 +31,19 @@ def select_region() -> Optional[Geometry]:
     return None
 
 
+def select_monitor() -> Optional[Geometry]:
+    try:
+        result = subprocess.run(
+            ["slurp", "-or"],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return parse_slurp_geometry(result.stdout)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
 def spectable_capture(geometry: Optional[Geometry] = None) -> Optional[Image.Image]:
     tmp = tempfile.mktemp(suffix=".png")
     try:

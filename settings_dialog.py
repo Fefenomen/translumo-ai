@@ -86,10 +86,18 @@ class SettingsDialog(QDialog):
         self.ollama_url = QLineEdit(self.cfg.get("ollama_url", "http://localhost:11434"))
         self.ollama_model = QLineEdit(self.cfg.get("ollama_model", "aya:8b"))
 
+        self.capture_mode = QComboBox()
+        self.capture_mode.addItem("Region (select area)", "region")
+        self.capture_mode.addItem("Monitor (full screen)", "monitor")
+        idx = self.capture_mode.findData(self.cfg.get("capture_mode", "region"))
+        if idx >= 0:
+            self.capture_mode.setCurrentIndex(idx)
+
         form.addRow("Source Language:", self.source_lang)
         form.addRow("Target Language:", self.target_lang)
         form.addRow("OCR Language:", self.ocr_lang)
         form.addRow("AI Provider:", self.provider)
+        form.addRow("Capture Mode:", self.capture_mode)
         form.addRow("Capture Interval:", self.interval)
         form.addRow("Ollama URL:", self.ollama_url)
         form.addRow("Ollama Model:", self.ollama_model)
@@ -146,6 +154,7 @@ class SettingsDialog(QDialog):
         self.cfg["target_lang"] = self.target_lang.currentData()
         self.cfg["ocr_lang"] = ocr_lang
         self.cfg["provider"] = self.provider.currentData()
+        self.cfg["capture_mode"] = self.capture_mode.currentData()
         self.cfg["capture_interval_ms"] = self.interval.value()
         self.cfg["ollama_url"] = self.ollama_url.text().strip()
         self.cfg["ollama_model"] = self.ollama_model.text().strip()
