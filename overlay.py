@@ -49,8 +49,6 @@ class TranslationOverlay(QWidget):
         self.original_text = original
         self.translated_text = translated
         self.label.setText(translated)
-        self.show()
-        self.raise_()
 
     def set_geometry_from_tuple(self, geometry):
         if geometry:
@@ -66,8 +64,7 @@ class TranslationOverlay(QWidget):
 
     def show_overlay(self):
         self.is_visible = True
-        self.show()
-        self.raise_()
+        self.setVisible(True)
 
     def hide_overlay(self):
         self.is_visible = False
