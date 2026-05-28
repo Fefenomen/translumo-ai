@@ -11,7 +11,7 @@ DEFAULT_CONFIG = {
     "target_lang": "fra",
     "ocr_lang": "jpn+eng",
     "capture_interval_ms": 800,
-    "provider": "openai",
+    "provider": "ollama",
     "api_keys": {
         "openai": "",
         "anthropic": "",
@@ -19,7 +19,7 @@ DEFAULT_CONFIG = {
         "gemini": "",
     },
     "ollama_url": "http://localhost:11434",
-    "ollama_model": "llama3",
+    "ollama_model": "aya:8b",
     "overlay_opacity": 180,
     "overlay_font_size": 16,
     "overlay_bg_color": "#1a1a1a",

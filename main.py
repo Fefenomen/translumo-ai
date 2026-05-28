@@ -68,6 +68,10 @@ class TranslumoAI:
         self.last_text = None
         self.last_translation_time = 0
         self.min_interval_between_api = 1.0
+        self.translation_cache = {}
+        self.cache_max_size = 100
+        self.debounce_stable_count = 0
+        self.debounce_threshold = 3
 
         self._init_translator()
         self._init_worker()
@@ -75,13 +79,13 @@ class TranslumoAI:
         self._select_region_startup()
 
     def _init_translator(self):
-        provider = self.cfg.get("provider", "openai")
+        provider = self.cfg.get("provider", "ollama")
         api_key = get_api_key(provider)
         self.translator = get_translator(
             provider,
             api_key=api_key,
             ollama_url=self.cfg.get("ollama_url", "http://localhost:11434"),
-            ollama_model=self.cfg.get("ollama_model", "llama3"),
+            ollama_model=self.cfg.get("ollama_model", "aya:8b"),
         )
 
     def _init_worker(self):
@@ -96,16 +100,27 @@ class TranslumoAI:
         self._tray_msg("Capture failed - check spectacle permissions", 2000)
 
     def _on_text_ready(self, text):
+        if text == self.last_text:
+            self.debounce_stable_count += 1
+            if self.debounce_stable_count >= self.debounce_threshold:
+                self._translate_async(text)
+            return
         if not text_significantly_different(self.last_text, text):
             return
         self.last_text = text
-        self._translate_async(text)
+        self.debounce_stable_count = 1
 
     def _translate_async(self, text):
         def do_translate():
             now = time.time()
             if now - self.last_translation_time < self.min_interval_between_api:
                 return
+
+            cached = self.translation_cache.get(text)
+            if cached is not None:
+                self._update_overlay(text, cached)
+                return
+
             self.last_translation_time = now
 
             source = self.cfg.get("source_lang", "jpn")
@@ -113,6 +128,9 @@ class TranslumoAI:
 
             result = self.translator.translate(text, source, target)
             if result.success and result.translated_text:
+                self.translation_cache[text] = result.translated_text
+                if len(self.translation_cache) > self.cache_max_size:
+                    self.translation_cache.pop(next(iter(self.translation_cache)))
                 self._update_overlay(text, result.translated_text)
             else:
                 err = result.error or "Unknown error"

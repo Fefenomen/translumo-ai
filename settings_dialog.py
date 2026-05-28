@@ -84,7 +84,7 @@ class SettingsDialog(QDialog):
         self.interval.setValue(self.cfg.get("capture_interval_ms", 800))
 
         self.ollama_url = QLineEdit(self.cfg.get("ollama_url", "http://localhost:11434"))
-        self.ollama_model = QLineEdit(self.cfg.get("ollama_model", "llama3"))
+        self.ollama_model = QLineEdit(self.cfg.get("ollama_model", "aya:8b"))
 
         form.addRow("Source Language:", self.source_lang)
         form.addRow("Target Language:", self.target_lang)
