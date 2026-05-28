@@ -34,6 +34,11 @@ def load_config() -> dict:
             cfg = json.load(f)
         for k, v in DEFAULT_CONFIG.items():
             cfg.setdefault(k, v)
+        api_providers = {"openai", "anthropic", "mistral", "gemini"}
+        provider = cfg.get("provider", "ollama")
+        if provider in api_providers and not cfg.get("api_keys", {}).get(provider, ""):
+            cfg["provider"] = "ollama"
+            save_config(cfg)
         return cfg
     return dict(DEFAULT_CONFIG)
 
