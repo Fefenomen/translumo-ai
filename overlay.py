@@ -118,7 +118,9 @@ class OverlayManager:
                 w = self._get_overlay()
 
             w.setGeometry(screen_rect)
-            w.set_text(b.get("original", b["text"]), b.get("translated", b["text"]))
+            orig = b.get("original") or b.get("text", "")
+            trans = b.get("translated") or b.get("text", "")
+            w.set_text(orig, trans)
             if not self._visible:
                 w.show()
             matched.append(w)
