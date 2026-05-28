@@ -2,6 +2,17 @@ import requests
 from .base import Translator, TranslationResult
 
 
+def _extract_error(resp):
+    try:
+        body = resp.json()
+        err = body.get("error", {})
+        if isinstance(err, dict):
+            return err.get("message", resp.reason)
+        return str(err)
+    except Exception:
+        return resp.reason
+
+
 class OpenAITranslator(Translator):
     def __init__(self, api_key: str = None, model: str = "gpt-4o", **kwargs):
         super().__init__(api_key, **kwargs)
@@ -34,6 +45,8 @@ class OpenAITranslator(Translator):
                 },
                 timeout=30,
             )
+            if resp.status_code != 200:
+                return TranslationResult("", text, "openai", success=False, error=_extract_error(resp))
             data = resp.json()
             translated = data["choices"][0]["message"]["content"].strip()
             return TranslationResult(translated, text, "openai")

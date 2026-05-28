@@ -2,6 +2,17 @@ import requests
 from .base import Translator, TranslationResult
 
 
+def _extract_error(resp):
+    try:
+        body = resp.json()
+        err = body.get("error", {})
+        if isinstance(err, dict):
+            return err.get("message", resp.reason)
+        return str(err)
+    except Exception:
+        return resp.reason
+
+
 class AnthropicTranslator(Translator):
     def __init__(self, api_key: str = None, model: str = "claude-3-5-haiku-latest", **kwargs):
         super().__init__(api_key, **kwargs)
@@ -27,6 +38,8 @@ class AnthropicTranslator(Translator):
                 },
                 timeout=30,
             )
+            if resp.status_code != 200:
+                return TranslationResult("", text, "anthropic", success=False, error=_extract_error(resp))
             data = resp.json()
             translated = data["content"][0]["text"].strip()
             return TranslationResult(translated, text, "anthropic")

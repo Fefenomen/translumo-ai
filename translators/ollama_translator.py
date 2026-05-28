@@ -2,6 +2,17 @@ import requests
 from .base import Translator, TranslationResult
 
 
+def _extract_error(resp):
+    try:
+        body = resp.json()
+        err = body.get("error", {})
+        if isinstance(err, dict):
+            return err.get("message", resp.reason)
+        return str(err)
+    except Exception:
+        return resp.reason
+
+
 class OllamaTranslator(Translator):
     def __init__(self, api_key: str = None, model: str = "llama3", base_url: str = "http://localhost:11434", **kwargs):
         super().__init__(api_key, **kwargs)
@@ -30,6 +41,8 @@ class OllamaTranslator(Translator):
                 },
                 timeout=60,
             )
+            if resp.status_code != 200:
+                return TranslationResult("", text, "ollama", success=False, error=_extract_error(resp))
             data = resp.json()
             translated = data["message"]["content"].strip()
             return TranslationResult(translated, text, "ollama")

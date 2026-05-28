@@ -1,6 +1,16 @@
 import requests
-import json
 from .base import Translator, TranslationResult
+
+
+def _extract_error(resp):
+    try:
+        body = resp.json()
+        err = body.get("error", {})
+        if isinstance(err, dict):
+            return err.get("message", resp.reason)
+        return str(err)
+    except Exception:
+        return resp.reason
 
 
 class GeminiTranslator(Translator):
@@ -33,6 +43,8 @@ class GeminiTranslator(Translator):
                 },
                 timeout=30,
             )
+            if resp.status_code != 200:
+                return TranslationResult("", text, "gemini", success=False, error=_extract_error(resp))
             data = resp.json()
             translated = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             return TranslationResult(translated, text, "gemini")

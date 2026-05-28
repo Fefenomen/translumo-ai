@@ -2,6 +2,17 @@ import requests
 from .base import Translator, TranslationResult
 
 
+def _extract_error(resp):
+    try:
+        body = resp.json()
+        err = body.get("error", {})
+        if isinstance(err, dict):
+            return err.get("message", resp.reason)
+        return str(err)
+    except Exception:
+        return resp.reason
+
+
 class MistralTranslator(Translator):
     def __init__(self, api_key: str = None, model: str = "mistral-large-latest", **kwargs):
         super().__init__(api_key, **kwargs)
@@ -31,6 +42,8 @@ class MistralTranslator(Translator):
                 },
                 timeout=30,
             )
+            if resp.status_code != 200:
+                return TranslationResult("", text, "mistral", success=False, error=_extract_error(resp))
             data = resp.json()
             translated = data["choices"][0]["message"]["content"].strip()
             return TranslationResult(translated, text, "mistral")
