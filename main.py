@@ -45,7 +45,7 @@ class CaptureWorker(QObject):
         if arr is None:
             self.capture_failed.emit()
             return
-        ocr_lang = self.cfg.get("ocr_lang", "jpn+eng")
+        ocr_lang = self.cfg.get("ocr_lang", "jpn")
         text = ocr_image(arr, lang=ocr_lang)
         if text:
             debug_log("OCR text:", repr(text[:80]))

@@ -9,7 +9,7 @@ DEFAULT_CONFIG = {
     "capture_region": None,
     "source_lang": "jpn",
     "target_lang": "fra",
-    "ocr_lang": "jpn+eng",
+    "ocr_lang": "jpn",
     "capture_interval_ms": 800,
     "provider": "ollama",
     "api_keys": {

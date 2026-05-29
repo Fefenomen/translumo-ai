@@ -148,11 +148,10 @@ class SettingsDialog(QDialog):
 
     def save_settings(self):
         ocr_code = self.ocr_lang.currentData()
-        ocr_lang = f"{ocr_code}+eng" if ocr_code != "eng" else "eng"
 
         self.cfg["source_lang"] = self.source_lang.currentData()
         self.cfg["target_lang"] = self.target_lang.currentData()
-        self.cfg["ocr_lang"] = ocr_lang
+        self.cfg["ocr_lang"] = ocr_code
         self.cfg["provider"] = self.provider.currentData()
         self.cfg["capture_mode"] = self.capture_mode.currentData()
         self.cfg["capture_interval_ms"] = self.interval.value()
