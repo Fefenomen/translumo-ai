@@ -31,14 +31,12 @@ class OllamaTranslator(Translator):
                     "model": self.model,
                     "messages": [
                         {
-                            "role": "system",
+                            "role": "user",
                             "content": (
-                                f"You are a translator. Translate {source_lang} text to {target_lang}. "
-                                "Multiple blocks are separated by --- . Reply ONLY with the translations "
-                                "in the same order, using the same --- separators. No explanations."
+                                f"Translate the following {source_lang} text to {target_lang}. "
+                                f"Reply ONLY with the translation, no explanation, no commentary.\n\n{text}"
                             ),
                         },
-                        {"role": "user", "content": text},
                     ],
                     "stream": False,
                     "options": {"temperature": 0.3},
